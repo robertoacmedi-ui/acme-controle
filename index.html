@@ -49,6 +49,12 @@ td{padding:12px;border-bottom:1px solid #e4f0ff;vertical-align:top;font-size:14p
 .coluna-importacao-box{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:12px 0}
 .coluna-importacao-box label{font-weight:700;color:#004fae;font-size:14px}
 .import-preview{background:#fff;border:1px solid #d9ebff;border-radius:12px;padding:12px;margin-top:12px;color:#3571b8;font-size:13px}
+
+.growth-tooltip-acme{position:fixed;z-index:9999;background:#102a43;color:#fff;padding:10px 12px;border-radius:10px;font-size:12px;line-height:1.45;box-shadow:0 8px 18px rgba(0,0,0,.22);pointer-events:none;display:none;max-width:260px}
+.growth-detail-table{margin-top:14px}
+.growth-detail-table table{min-width:760px}
+.growth-detail-table tr:hover td{background:#f0f7ff}
+.growth-click-info{margin-top:10px;background:#f8fbff;border:1px dashed #b7d6ff;color:#3571b8;border-radius:12px;padding:12px;font-size:13px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
@@ -139,6 +145,24 @@ td{padding:12px;border-bottom:1px solid #e4f0ff;vertical-align:top;font-size:14p
 
   <div class="growth-chart-box">
     <canvas id="graficoCrescimentoPercentual"></canvas>
+  </div>
+  <div id="infoCrescimentoSelecionado" class="growth-click-info">Clique ou passe o mouse em uma barra para ver os detalhes do período.</div>
+  <div class="table-wrap growth-detail-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Período</th>
+          <th>Data inicial</th>
+          <th>Data final</th>
+          <th>Ano</th>
+          <th>Mês/Semana</th>
+          <th>Vendas anteriores</th>
+          <th>Vendas atuais</th>
+          <th>Crescimento</th>
+        </tr>
+      </thead>
+      <tbody id="tabelaCrescimentoDetalhado"></tbody>
+    </table>
   </div>
 </div>
 
@@ -736,179 +760,7 @@ let old=window.atualizarTudo;window.atualizarTudo=function(){if(typeof old==="fu
 </script>
 
 
-<script>
-(function(){
-let modoGraficoCrescimento = "semana";
 
-function acmeDataVendaCrescimento(v){
-  if(v.dataVenda) return v.dataVenda;
-  if(v.data) return v.data;
-  if(typeof dataVendaInicial === "function") return dataVendaInicial(v);
-  if(v.criadoEm){
-    let partes = String(v.criadoEm).split(" ")[0].split("/");
-    if(partes.length === 3) return partes[2]+"-"+partes[1].padStart(2,"0")+"-"+partes[0].padStart(2,"0");
-  }
-  return "";
-}
-
-function inicioSemanaISO(dataStr){
-  const d = new Date(dataStr + "T12:00:00");
-  if(isNaN(d.getTime())) return "";
-  const dia = d.getDay() || 7;
-  d.setDate(d.getDate() - dia + 1);
-  return d.toISOString().slice(0,10);
-}
-
-function chavePeriodoVenda(v, modo){
-  const data = acmeDataVendaCrescimento(v);
-  if(!data) return "";
-  if(modo === "mes") return String(data).slice(0,7);
-  return inicioSemanaISO(data);
-}
-
-function rotuloPeriodo(chave, modo){
-  if(!chave) return "";
-  if(modo === "mes"){
-    const p = chave.split("-");
-    return p.length === 2 ? p[1] + "/" + p[0] : chave;
-  }
-  const d = new Date(chave + "T12:00:00");
-  const fim = new Date(d);
-  fim.setDate(fim.getDate() + 6);
-  const iniBR = String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0");
-  const fimBR = String(fim.getDate()).padStart(2,"0") + "/" + String(fim.getMonth()+1).padStart(2,"0");
-  return iniBR + " a " + fimBR;
-}
-
-function dadosCrescimento(modo){
-  if(typeof vendas === "undefined") return [];
-  const grupos = {};
-  (vendas || []).forEach(v=>{
-    const chave = chavePeriodoVenda(v, modo);
-    if(!chave) return;
-    grupos[chave] = (grupos[chave] || 0) + 1;
-  });
-
-  const chaves = Object.keys(grupos).sort();
-  return chaves.map((chave, i)=>{
-    const atual = grupos[chave] || 0;
-    const anterior = i > 0 ? (grupos[chaves[i-1]] || 0) : 0;
-    let crescimento = 0;
-    if(anterior > 0) crescimento = ((atual - anterior) / anterior) * 100;
-    else if(atual > 0) crescimento = 100;
-    return {chave, label:rotuloPeriodo(chave, modo), atual, anterior, crescimento};
-  });
-}
-
-function desenharGraficoCrescimento(){
-  const canvas = document.getElementById("graficoCrescimentoPercentual");
-  if(!canvas) return;
-
-  const dados = dadosCrescimento(modoGraficoCrescimento);
-  const ctx = canvas.getContext("2d");
-  const w = canvas.clientWidth || 900;
-  const h = canvas.clientHeight || 360;
-  canvas.width = w;
-  canvas.height = h;
-  ctx.clearRect(0,0,w,h);
-
-  const elAtual = document.getElementById("cresPeriodoAtual");
-  const elAnterior = document.getElementById("cresPeriodoAnterior");
-  const elPct = document.getElementById("cresPercentualPeriodo");
-  const elModo = document.getElementById("cresModo");
-
-  if(elModo) elModo.textContent = modoGraficoCrescimento === "mes" ? "Mês" : "Semana";
-
-  if(!dados.length){
-    if(elAtual) elAtual.textContent = "0";
-    if(elAnterior) elAnterior.textContent = "0";
-    if(elPct) elPct.textContent = "0%";
-    ctx.fillStyle = "#5681b5";
-    ctx.font = "16px Arial";
-    ctx.fillText("Nenhuma venda com data para calcular crescimento.", 20, 40);
-    return;
-  }
-
-  const ultimo = dados[dados.length - 1];
-  if(elAtual) elAtual.textContent = ultimo.atual;
-  if(elAnterior) elAnterior.textContent = ultimo.anterior;
-  if(elPct) elPct.textContent = (ultimo.crescimento >= 0 ? "+" : "") + ultimo.crescimento.toFixed(1).replace(".", ",") + "%";
-
-  const margemEsq = 60, margemDir = 20, margemTopo = 35, margemBaixo = 80;
-  const areaW = w - margemEsq - margemDir;
-  const areaH = h - margemTopo - margemBaixo;
-  const valores = dados.map(d=>d.crescimento);
-  const maxAbs = Math.max(10, ...valores.map(v=>Math.abs(v)));
-  const zeroY = margemTopo + areaH/2;
-  const gap = 12;
-  const bw = Math.max(24, (areaW / dados.length) - gap);
-
-  ctx.strokeStyle = "#cfe4ff";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(margemEsq, margemTopo);
-  ctx.lineTo(margemEsq, margemTopo + areaH);
-  ctx.lineTo(w - margemDir, margemTopo + areaH);
-  ctx.stroke();
-
-  ctx.strokeStyle = "#94a3b8";
-  ctx.beginPath();
-  ctx.moveTo(margemEsq, zeroY);
-  ctx.lineTo(w - margemDir, zeroY);
-  ctx.stroke();
-
-  ctx.fillStyle = "#004fae";
-  ctx.font = "bold 14px Arial";
-  ctx.fillText("Crescimento percentual " + (modoGraficoCrescimento === "mes" ? "por mês" : "por semana"), margemEsq, 20);
-
-  dados.forEach((d, i)=>{
-    const x = margemEsq + i * (bw + gap) + gap;
-    const altura = Math.abs(d.crescimento) / maxAbs * (areaH/2 - 12);
-    const y = d.crescimento >= 0 ? zeroY - altura : zeroY;
-    ctx.fillStyle = d.crescimento >= 0 ? "#10b981" : "#ef4444";
-    ctx.fillRect(x, y, bw, altura || 2);
-
-    ctx.fillStyle = "#102a43";
-    ctx.font = "12px Arial";
-    ctx.textAlign = "center";
-    const txt = (d.crescimento >= 0 ? "+" : "") + d.crescimento.toFixed(1).replace(".", ",") + "%";
-    ctx.fillText(txt, x + bw/2, d.crescimento >= 0 ? y - 6 : y + altura + 14);
-
-    ctx.save();
-    ctx.translate(x + bw/2, margemTopo + areaH + 42);
-    ctx.rotate(-0.45);
-    ctx.fillText(d.label, 0, 0);
-    ctx.restore();
-  });
-
-  ctx.textAlign = "left";
-}
-
-window.mudarGraficoCrescimento = function(modo){
-  modoGraficoCrescimento = modo;
-  const btnSemana = document.getElementById("btnCrescimentoSemana");
-  const btnMes = document.getElementById("btnCrescimentoMes");
-  if(btnSemana && btnMes){
-    btnSemana.classList.toggle("active", modo === "semana");
-    btnMes.classList.toggle("active", modo === "mes");
-    btnSemana.classList.toggle("btn-secondary", modo !== "semana");
-    btnMes.classList.toggle("btn-secondary", modo !== "mes");
-  }
-  desenharGraficoCrescimento();
-};
-
-window.renderizarGraficoCrescimentoPercentual = desenharGraficoCrescimento;
-
-const antigoAtualizarTudoCrescimento = window.atualizarTudo;
-window.atualizarTudo = function(){
-  if(typeof antigoAtualizarTudoCrescimento === "function") antigoAtualizarTudoCrescimento();
-  
-};
-
-
-
-})();
-</script>
 
 
 
@@ -1158,43 +1010,7 @@ window.renderizarRelatorioAvancado = function(){
 </script>
 
 
-<script>
-(function(){
-if(window.__acmePerfFix) return;
-window.__acmePerfFix = true;
 
-let timerAtualizacao = null;
-
-window.acmeAtualizarLeve = function(){
-  clearTimeout(timerAtualizacao);
-  timerAtualizacao = setTimeout(function(){
-    try{ if(typeof renderizarRelatorioAvancado==='function') renderizarRelatorioAvancado(); }catch(e){}
-    try{ if(typeof renderizarRankingProdutosVendidos==='function') renderizarRankingProdutosVendidos(); }catch(e){}
-    try{ if(typeof renderizarGraficoCrescimentoPercentual==='function') renderizarGraficoCrescimentoPercentual(); }catch(e){}
-  }, 120);
-};
-
-const oldAtualizarTudo = window.atualizarTudo;
-
-window.atualizarTudo = function(){
-  if(typeof oldAtualizarTudo === 'function'){
-    oldAtualizarTudo();
-  }
-  window.acmeAtualizarLeve();
-};
-
-window.addEventListener('load', function(){
-  window.acmeAtualizarLeve();
-});
-
-document.addEventListener('visibilitychange', function(){
-  if(!document.hidden){
-    window.acmeAtualizarLeve();
-  }
-});
-
-})();
-</script>
 
 
 <script>
@@ -1257,7 +1073,6 @@ window.renderizarRankingProdutosVendidos = function(){
   });
 };
 
-setTimeout(()=>{try{renderizarRankingProdutosVendidos()}catch(e){}}, 500);
 })();
 </script>
 
@@ -1468,7 +1283,6 @@ window.limparFiltrosRelatorio = function(){
   renderizarRelatorioAvancado();
 };
 
-setTimeout(()=>{try{renderizarRelatorioAvancado()}catch(e){}}, 600);
 })();
 </script>
 
@@ -1574,6 +1388,352 @@ window.limparVenda = function(){
   if(typeof limparVendaOriginalValorItem === "function") limparVendaOriginalValorItem();
   limparValorItemVenda();
 };
+})();
+</script>
+
+
+<script>
+(function(){
+if(window.__acmeUltraLeve) return;
+window.__acmeUltraLeve = true;
+
+let acmeTimer = null;
+
+function atualizarTelaLeve(){
+  clearTimeout(acmeTimer);
+  acmeTimer = setTimeout(function(){
+    try{ if(typeof renderizarRelatorioAvancado === "function") renderizarRelatorioAvancado(); }catch(e){}
+    try{ if(typeof renderizarRankingProdutosVendidos === "function") renderizarRankingProdutosVendidos(); }catch(e){}
+    try{ if(typeof renderizarGraficoCrescimentoPercentual === "function") renderizarGraficoCrescimentoPercentual(); }catch(e){}
+    try{ if(typeof renderizarGraficoVendasPizza === "function") renderizarGraficoVendasPizza(); }catch(e){}
+  }, 180);
+}
+
+window.acmeAtualizarTelaLeve = atualizarTelaLeve;
+
+const salvarOriginal = window.salvarLocal;
+window.salvarLocal = function(){
+  if(typeof salvarOriginal === "function") salvarOriginal();
+  atualizarTelaLeve();
+};
+
+const atualizarOriginal = window.atualizarTudo;
+window.atualizarTudo = function(){
+  if(typeof atualizarOriginal === "function") atualizarOriginal();
+  atualizarTelaLeve();
+};
+
+const abrirOriginal = window.abrirPagina;
+window.abrirPagina = function(id, btn){
+  if(typeof abrirOriginal === "function") abrirOriginal(id, btn);
+  if(id === "relatorios") atualizarTelaLeve();
+};
+
+window.addEventListener("load", function(){
+  atualizarTelaLeve();
+});
+})();
+</script>
+
+
+<script>
+(function(){
+if(window.__crescimentoInterativoAcme) return;
+window.__crescimentoInterativoAcme = true;
+
+let modoCrescimentoInterativo = "semana";
+let barrasCrescimento = [];
+let tooltipCrescimento = null;
+
+function criarTooltip(){
+  if(tooltipCrescimento) return tooltipCrescimento;
+  tooltipCrescimento = document.createElement("div");
+  tooltipCrescimento.className = "growth-tooltip-acme";
+  document.body.appendChild(tooltipCrescimento);
+  return tooltipCrescimento;
+}
+
+function dataVendaCres(v){
+  let d = v.dataVenda || v.data || "";
+  if(!d && typeof dataVendaInicial === "function") d = dataVendaInicial(v);
+  if(!d && v.criadoEm){
+    let p = String(v.criadoEm).split(" ")[0].split("/");
+    if(p.length === 3) d = p[2]+"-"+p[1].padStart(2,"0")+"-"+p[0].padStart(2,"0");
+  }
+  if(typeof d === "number"){
+    const dt = new Date(Math.round((d - 25569) * 86400 * 1000));
+    d = dt.toISOString().slice(0,10);
+  }
+  if(d instanceof Date) d = d.toISOString().slice(0,10);
+  d = String(d||"").trim();
+  if(/^\d{2}\/\d{2}\/\d{4}$/.test(d)){
+    const p=d.split("/");
+    d=p[2]+"-"+p[1]+"-"+p[0];
+  }
+  return d;
+}
+
+function dataBR(d){
+  if(!d) return "";
+  const p = String(d).split("-");
+  return p.length === 3 ? p[2]+"/"+p[1]+"/"+p[0] : d;
+}
+
+function mesNome(num){
+  const nomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+  return nomes[(Number(num)||1)-1] || "";
+}
+
+function inicioSemana(dataStr){
+  const d = new Date(dataStr + "T12:00:00");
+  if(isNaN(d.getTime())) return "";
+  const dia = d.getDay() || 7;
+  d.setDate(d.getDate() - dia + 1);
+  return d.toISOString().slice(0,10);
+}
+
+function fimSemana(chave){
+  const d = new Date(chave + "T12:00:00");
+  if(isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() + 6);
+  return d.toISOString().slice(0,10);
+}
+
+function fimMes(chave){
+  const p = chave.split("-");
+  const d = new Date(Number(p[0]), Number(p[1]), 0);
+  return d.toISOString().slice(0,10);
+}
+
+function chavePeriodo(v, modo){
+  const d = dataVendaCres(v);
+  if(!d) return "";
+  if(modo === "mes") return d.slice(0,7);
+  return inicioSemana(d);
+}
+
+function detalhesPeriodo(chave, modo){
+  if(modo === "mes"){
+    const p = chave.split("-");
+    return {
+      inicio: chave + "-01",
+      fim: fimMes(chave),
+      ano: p[0],
+      nome: mesNome(p[1]) + "/" + p[0],
+      label: mesNome(p[1]) + " " + p[0]
+    };
+  }
+  const ano = chave.slice(0,4);
+  const fim = fimSemana(chave);
+  return {
+    inicio: chave,
+    fim,
+    ano,
+    nome: "Semana de " + dataBR(chave) + " a " + dataBR(fim),
+    label: dataBR(chave) + " a " + dataBR(fim)
+  };
+}
+
+function calcularDados(modo){
+  const base = Array.isArray(window.vendas) ? window.vendas : (typeof vendas !== "undefined" ? vendas : []);
+  const grupos = {};
+  base.forEach(v=>{
+    const chave = chavePeriodo(v, modo);
+    if(!chave) return;
+    grupos[chave] = (grupos[chave] || 0) + 1;
+  });
+
+  const chaves = Object.keys(grupos).sort();
+  return chaves.map((chave, i)=>{
+    const atual = grupos[chave] || 0;
+    const anterior = i > 0 ? (grupos[chaves[i-1]] || 0) : 0;
+    let crescimento = 0;
+    if(anterior > 0) crescimento = ((atual - anterior) / anterior) * 100;
+    else if(atual > 0) crescimento = 100;
+    const det = detalhesPeriodo(chave, modo);
+    return {chave, atual, anterior, crescimento, ...det};
+  });
+}
+
+function atualizarCards(dados, modo){
+  const ultimo = dados[dados.length-1];
+  const set = (id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  if(!ultimo){
+    set("cresPeriodoAtual","0");
+    set("cresPeriodoAnterior","0");
+    set("cresPercentualPeriodo","0%");
+    set("cresModo", modo === "mes" ? "Mês" : "Semana");
+    return;
+  }
+  set("cresPeriodoAtual", ultimo.atual);
+  set("cresPeriodoAnterior", ultimo.anterior);
+  set("cresPercentualPeriodo", (ultimo.crescimento>=0?"+":"") + ultimo.crescimento.toFixed(1).replace(".",",") + "%");
+  set("cresModo", modo === "mes" ? "Mês" : "Semana");
+}
+
+function atualizarTabela(dados, modo){
+  const tbody = document.getElementById("tabelaCrescimentoDetalhado");
+  if(!tbody) return;
+  tbody.innerHTML = "";
+  if(!dados.length){
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Nenhum dado encontrado.</td></tr>';
+    return;
+  }
+  dados.slice().reverse().forEach(d=>{
+    tbody.innerHTML += `<tr>
+      <td>${d.label}</td>
+      <td>${dataBR(d.inicio)}</td>
+      <td>${dataBR(d.fim)}</td>
+      <td>${d.ano}</td>
+      <td>${modo === "mes" ? d.nome : d.nome}</td>
+      <td>${d.anterior}</td>
+      <td><strong>${d.atual}</strong></td>
+      <td><strong>${(d.crescimento>=0?"+":"") + d.crescimento.toFixed(1).replace(".",",")}%</strong></td>
+    </tr>`;
+  });
+}
+
+function mostrarInfo(d){
+  const box = document.getElementById("infoCrescimentoSelecionado");
+  if(!box || !d) return;
+  box.innerHTML = `<b>Período selecionado:</b> ${d.label}<br>
+  <b>Data inicial:</b> ${dataBR(d.inicio)} &nbsp; | &nbsp; <b>Data final:</b> ${dataBR(d.fim)}<br>
+  <b>Ano:</b> ${d.ano}<br>
+  <b>Vendas anteriores:</b> ${d.anterior}<br>
+  <b>Vendas atuais:</b> ${d.atual}<br>
+  <b>Crescimento:</b> ${(d.crescimento>=0?"+":"") + d.crescimento.toFixed(1).replace(".",",")}%`;
+}
+
+function desenharInterativo(){
+  const canvas = document.getElementById("graficoCrescimentoPercentual");
+  if(!canvas) return;
+  const dados = calcularDados(modoCrescimentoInterativo);
+  atualizarCards(dados, modoCrescimentoInterativo);
+  atualizarTabela(dados, modoCrescimentoInterativo);
+
+  const ctx = canvas.getContext("2d");
+  const w = canvas.clientWidth || 900;
+  const h = canvas.clientHeight || 360;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.clearRect(0,0,w,h);
+  barrasCrescimento = [];
+
+  if(!dados.length){
+    ctx.fillStyle = "#5681b5";
+    ctx.font = "16px Arial";
+    ctx.fillText("Nenhuma venda com data para calcular crescimento.", 20, 40);
+    return;
+  }
+
+  const margemEsq = 60, margemDir = 20, margemTopo = 40, margemBaixo = 85;
+  const areaW = w - margemEsq - margemDir;
+  const areaH = h - margemTopo - margemBaixo;
+  const maxAbs = Math.max(10, ...dados.map(d=>Math.abs(d.crescimento)));
+  const zeroY = margemTopo + areaH/2;
+  const gap = 12;
+  const bw = Math.max(24, (areaW / dados.length) - gap);
+
+  ctx.strokeStyle = "#cfe4ff";
+  ctx.beginPath();
+  ctx.moveTo(margemEsq, margemTopo);
+  ctx.lineTo(margemEsq, margemTopo + areaH);
+  ctx.lineTo(w - margemDir, margemTopo + areaH);
+  ctx.stroke();
+
+  ctx.strokeStyle = "#94a3b8";
+  ctx.beginPath();
+  ctx.moveTo(margemEsq, zeroY);
+  ctx.lineTo(w - margemDir, zeroY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#004fae";
+  ctx.font = "bold 14px Arial";
+  ctx.fillText("Crescimento percentual " + (modoCrescimentoInterativo === "mes" ? "por mês" : "por semana"), margemEsq, 22);
+
+  dados.forEach((d,i)=>{
+    const x = margemEsq + i*(bw+gap) + gap;
+    const altura = Math.abs(d.crescimento)/maxAbs*(areaH/2 - 12);
+    const y = d.crescimento >= 0 ? zeroY - altura : zeroY;
+    const cor = d.crescimento >= 0 ? "#10b981" : "#ef4444";
+    ctx.fillStyle = cor;
+    ctx.fillRect(x, y, bw, Math.max(altura,2));
+
+    barrasCrescimento.push({x, y, w:bw, h:Math.max(altura,2), d});
+
+    ctx.fillStyle = "#102a43";
+    ctx.font = "12px Arial";
+    ctx.textAlign = "center";
+    const txt = (d.crescimento>=0?"+":"") + d.crescimento.toFixed(1).replace(".",",") + "%";
+    ctx.fillText(txt, x+bw/2, d.crescimento>=0 ? y-6 : y+altura+14);
+
+    ctx.save();
+    ctx.translate(x+bw/2, margemTopo + areaH + 45);
+    ctx.rotate(-0.45);
+    ctx.fillText(d.label, 0, 0);
+    ctx.restore();
+  });
+  ctx.textAlign = "left";
+
+  mostrarInfo(dados[dados.length-1]);
+}
+
+function eventoCanvas(e){
+  const canvas = document.getElementById("graficoCrescimentoPercentual");
+  if(!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const escalaX = canvas.width / rect.width;
+  const escalaY = canvas.height / rect.height;
+  const x = mx * escalaX;
+  const y = my * escalaY;
+  const barra = barrasCrescimento.find(b=>x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h+18);
+  const tip = criarTooltip();
+  if(!barra){
+    tip.style.display = "none";
+    canvas.style.cursor = "default";
+    return;
+  }
+  canvas.style.cursor = "pointer";
+  const d = barra.d;
+  tip.innerHTML = `<b>${d.label}</b><br>
+  Data inicial: ${dataBR(d.inicio)}<br>
+  Data final: ${dataBR(d.fim)}<br>
+  Ano: ${d.ano}<br>
+  Vendas anteriores: ${d.anterior}<br>
+  Vendas atuais: ${d.atual}<br>
+  Crescimento: ${(d.crescimento>=0?"+":"") + d.crescimento.toFixed(1).replace(".",",")}%`;
+  tip.style.left = (e.clientX + 14) + "px";
+  tip.style.top = (e.clientY + 14) + "px";
+  tip.style.display = "block";
+  if(e.type === "click") mostrarInfo(d);
+}
+
+window.mudarGraficoCrescimento = function(modo){
+  modoCrescimentoInterativo = modo;
+  const btnSemana = document.getElementById("btnCrescimentoSemana");
+  const btnMes = document.getElementById("btnCrescimentoMes");
+  if(btnSemana && btnMes){
+    btnSemana.classList.toggle("active", modo === "semana");
+    btnMes.classList.toggle("active", modo === "mes");
+    btnSemana.classList.toggle("btn-secondary", modo !== "semana");
+    btnMes.classList.toggle("btn-secondary", modo !== "mes");
+  }
+  desenharInterativo();
+};
+
+window.renderizarGraficoCrescimentoPercentual = desenharInterativo;
+
+window.addEventListener("load", ()=>{
+  const canvas = document.getElementById("graficoCrescimentoPercentual");
+  if(canvas){
+    canvas.addEventListener("mousemove", eventoCanvas);
+    canvas.addEventListener("click", eventoCanvas);
+    canvas.addEventListener("mouseleave", ()=>{const t=criarTooltip(); t.style.display="none";});
+  }
+  setTimeout(desenharInterativo, 500);
+});
 })();
 </script>
 
